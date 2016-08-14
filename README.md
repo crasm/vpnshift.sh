@@ -18,6 +18,10 @@ This is particularly useful for not sending existing browser tabs or
 long-running daemon traffic (like dropbox or syncthing) through your VPN.
 
     $ vpnshift -c myopenvpn.conf chromium --incognito
+    starting openvpn..................
+    <stdout and stderr from chromium>
+    stopping openvpn...
+    $
 
 Once the command exits, openvpn is terminated and the namespace is torn
 down.

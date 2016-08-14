@@ -1,0 +1,209 @@
+#!/bin/bash
+#
+# Copyright (c) 2016, crasm <crasm@vczf.io>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+usage="usage: vpnshift -c <config> [<command> [<arg>...]]
+optional:
+	-u <user>      Execute <command> as <user>
+	-l <logfile>   Log openvpn output to <logfile>
+
+if not otherwise specified:
+	- The command defaults to the user's shell (${SHELL}).
+	- The user is inferred from sudo.
+	- Logs are placed in /var/log/vpnshift.
+"
+
+die() {
+	format="$1"; shift
+	>&2 printf "${format}\n" "$@"
+	clean_exit 1
+}
+
+hush() {
+	eval "$@" > /dev/null 2> /dev/null
+}
+
+must() {
+	eval "$@" || die "failed: %s" "$*"
+}
+
+is_running() {
+	local pid="$1"
+	hush kill -s 0 "${pid}"
+}
+
+sig_kill() {
+	local pid="$1"
+	hush kill -s KILL "${pid}"
+}
+
+sig_term() {
+	local pid="$1"
+	hush kill -s TERM "${pid}"
+}
+
+clean_exit() {
+	local exit_code="$1"
+
+	hush ip netns delete "${namespace}"
+	hush rm --recursive --force "${namespace_dir}"
+	hush sysctl --quiet net.ipv4.ip_forward="${forward}"
+	echo "${rules}" | hush iptables-restore
+
+	if is_running "${openvpn_pid}"; then
+		# Kill openvpn.
+		sig_term "${openvpn_pid}"
+		>&2 printf "stopping openvpn."
+		for i in {1..100}; do
+			is_running "${openvpn_pid}" || break
+			sleep 0.1
+			printf "."
+		done
+		printf "\n"
+
+		if is_running "${openvpn_pid}"; then
+			>&2 echo "forced to kill openvpn"
+			sig_kill "${openvpn_pid}"
+		fi
+	fi
+
+	# Sometimes there's a lag for the veths to be deleted by linux, so we
+	# delete it manually.
+	hush ip link delete "${veth_default}"
+	hush ip link delete "${veth_vpn}"
+
+	exit "${exit_code}"
+}
+
+main() {
+	local logdir="/var/log/vpnshift"
+	mkdir --parents "${logdir}"
+
+	local config=
+	local user="${SUDO_USER}"
+	local log="${logdir}/openvpn.log"
+	while getopts "hc:u:l:" opt; do
+		case "${opt}" in
+			h) die "${usage}" ;;
+			c) config="${OPTARG}" ;;
+			u) user="${OPTARG}"   ;;
+			l) log="$(realpath "${OPTARG}")"    ;;
+			*) die "unknown option: %s" "${opt}" ;;
+		esac
+	done
+	shift $(( OPTIND - 1 ))
+
+	if [[ -z "${config}" ]]; then
+		die "openvpn config is required"
+	fi
+
+	if [[ -z "${user}" ]]; then
+		die "user must be provided explicitly via '-u' or implicitly via SUDO_USER"
+	fi
+
+	local cmd="$1"; shift
+
+	if [[ -z "${cmd}" ]]; then
+		cmd="${SHELL}"
+	fi
+
+	must ip netns add vpnshift
+	must mkdir --parents "${namespace_dir}"
+
+	# Set up loopback interface
+
+	must ip -netns "${namespace}" address add '127.0.0.1/8' dev lo
+	must ip -netns "${namespace}" address add '::1/128' dev lo
+	must ip -netns "${namespace}" link set lo up
+
+	# Set up veth tunnel
+
+	must ip link add "${veth_vpn}" type veth peer name "${veth_default}"
+	must ip link set "${veth_vpn}" netns "${namespace}"
+
+	must ip link set "${veth_default}" up
+	must ip -netns "${namespace}" link set "${veth_vpn}" up
+
+	must ip address add "10.10.10.10/31" dev "${veth_default}"
+	must ip -netns "${namespace}" \
+		address add "10.10.10.11/31" dev "${veth_vpn}"
+
+	must ip -netns "${namespace}" \
+		route add default via "10.10.10.10" dev "${veth_vpn}"
+
+	# Set up NAT and IP forwarding
+
+	must sysctl --quiet net.ipv4.ip_forward=1
+	must iptables --table "nat" \
+		--append "POSTROUTING" \
+		--jump "MASQUERADE" \
+		--source "10.10.10.10/31"
+
+	# Set up DNS inside the new namespace
+	printf > "${namespace_dir}/resolv.conf" \
+		"nameserver %s\nnameserver %s\n" \
+		"108.62.19.131" \
+		"104.238.194.235"
+
+	# Launch openvpn
+
+	local tun="tunvpn"
+	hush ip netns exec "${namespace}" openvpn \
+		--cd "$(dirname "${config}")" \
+		--config "${config}" \
+		--dev "${tun}" \
+		--log "${log}" &
+
+	openvpn_pid="$!"
+
+	>&2 printf "starting openvpn."
+	while ! hush ip -netns "${namespace}" link show "${tun}"; do
+		if ! is_running "${openvpn_pid}"; then
+			clean_exit 1
+		fi
+		sleep 0.1
+		printf "."
+	done
+	printf "\n"
+
+	# Removing the default route protects from exposure if openvpn exits
+	# prematurely.
+	must ip -netns "${namespace}" \
+		route delete default via "10.10.10.10" dev "${veth_vpn}"
+
+	ip netns exec "${namespace}" sudo -u "${user}" "${cmd}" "$@"
+}
+
+if [[ $# == 0 ]]; then
+	die "${usage}"
+elif [[ "$(id -u)" != 0 ]]; then
+	sudo "$0" "$@"
+	exit
+fi
+
+# Stuff needed by clean_exit() to restore previous state.
+namespace="vpnshift"
+namespace_dir="/etc/netns/${namespace}"
+forward="$(sysctl --values "net.ipv4.ip_forward")"
+rules="$(iptables-save -t nat)"
+veth_default="veth_default"
+veth_vpn="veth_vpn"
+openvpn_pid= # This is set later.
+
+# Enable cleanup routine.
+trap 'clean_exit 1' INT TERM
+trap 'clean_exit 0' EXIT
+
+main "$@"

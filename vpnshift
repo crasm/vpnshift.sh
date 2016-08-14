@@ -21,8 +21,8 @@ optional:
 
 if not otherwise specified:
 	- The command defaults to the user's shell (${SHELL}).
-	- The user is inferred from sudo.
-	- Logs are placed in /var/log/vpnshift.
+	- The user must be inferred from sudo.
+	- Logs are placed in /var/log/vpnshift/.
 "
 
 die() {
@@ -98,8 +98,8 @@ main() {
 		case "${opt}" in
 			h) die "${usage}" ;;
 			c) config="${OPTARG}" ;;
-			u) user="${OPTARG}"   ;;
-			l) log="$(realpath "${OPTARG}")"    ;;
+			u) user="${OPTARG}" ;;
+			l) log="$(realpath "${OPTARG}")" ;;
 			*) die "unknown option: %s" "${opt}" ;;
 		esac
 	done

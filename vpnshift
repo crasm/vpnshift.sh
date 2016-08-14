@@ -97,7 +97,7 @@ main() {
 	while getopts "hc:u:l:" opt; do
 		case "${opt}" in
 			h) die "${usage}" ;;
-			c) config="${OPTARG}" ;;
+			c) config="$(realpath "${OPTARG}")" ;;
 			u) user="${OPTARG}" ;;
 			l) log="$(realpath "${OPTARG}")" ;;
 			*) die "unknown option: %s" "${opt}" ;;

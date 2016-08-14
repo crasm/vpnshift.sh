@@ -54,9 +54,9 @@ Limitations
   (Determining the IP addresses is a major paint-point of the bullet
   above.)
 - DNS nameservers pushed by openvpn are not recognized properly. The
-  nameservers used are currently hard-coded to [cryptostorm's][cs] DNS:
-  [cs-ussouth2][] (108.62.19.131) and [cs-uswest2][] (104.238.194.235).
-  DNS traffic is still forwarded through the VPN.
+  nameservers are hard-coded to [cryptostorm's][cs] DNS: [cs-ussouth2][]
+  (108.62.19.131) and [cs-uswest2][] (104.238.194.235). DNS traffic is
+  still forwarded through the VPN.
 
   [cs]:          https://cryptostorm.is/
   [cs-ussouth2]: https://github.com/jedisct1/dnscrypt-proxy/blob/1.7.0/dnscrypt-resolvers.csv#L19

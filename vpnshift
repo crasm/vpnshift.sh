@@ -65,11 +65,14 @@ clean_exit() {
 	if is_running "${openvpn_pid}"; then
 		# Kill openvpn.
 		sig_term "${openvpn_pid}"
-		>&2 printf "stopping openvpn."
+		>&2 printf "stopping openvpn (pid = %d)." "${openvpn_pid}"
 		for i in {1..100}; do
-			is_running "${openvpn_pid}" || break
-			sleep 0.1
-			printf "."
+			if is_running "${openvpn_pid}"; then
+				sleep 0.1
+				printf "."
+			else
+				break
+			fi
 		done
 		printf "\n"
 
@@ -166,9 +169,13 @@ main() {
 		--dev "${tun}" \
 		--log "${log}" &
 
-	openvpn_pid="$!"
+	openvpn_pid=$(ps --ppid "$!" \
+		--format "pid" \
+		--no-headers
+	)
 
-	>&2 printf "starting openvpn."
+	>&2 printf "waiting for openvpn (pid = %d)." "${openvpn_pid}"
+
 	while ! hush ip -netns "${namespace}" link show "${tun}"; do
 		if ! is_running "${openvpn_pid}"; then
 			clean_exit 1

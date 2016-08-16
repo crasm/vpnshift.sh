@@ -108,10 +108,6 @@ main() {
 	done
 	shift $(( OPTIND - 1 ))
 
-	if [[ -z "${config}" ]]; then
-		die "openvpn config is required"
-	fi
-
 	if [[ -z "${user}" ]]; then
 		die "user must be provided explicitly via '-u' or implicitly via SUDO_USER"
 	fi
@@ -160,42 +156,10 @@ main() {
 		"108.62.19.131" \
 		"104.238.194.235"
 
-	# Launch openvpn
-
-	local tun="tunvpn"
-	hush ip netns exec "${namespace}" openvpn \
-		--cd "$(dirname "${config}")" \
-		--config "${config}" \
-		--dev "${tun}" \
-		--log "${log}" &
-
-	openvpn_pid=$(ps --ppid "$!" \
-		--format "pid" \
-		--no-headers
-	)
-
-	>&2 printf "waiting for openvpn (pid = %d)." "${openvpn_pid}"
-
-	while ! hush ip -netns "${namespace}" link show "${tun}"; do
-		if ! is_running "${openvpn_pid}"; then
-			clean_exit 1
-		fi
-		sleep 0.1
-		printf "."
-	done
-	printf "\n"
-
-	# Removing the default route protects from exposure if openvpn exits
-	# prematurely.
-	must ip -netns "${namespace}" \
-		route delete default via "10.10.10.10" dev "${veth_vpn}"
-
 	ip netns exec "${namespace}" sudo -u "${user}" "${cmd}" "$@"
 }
 
-if [[ $# == 0 ]]; then
-	die "${usage}"
-elif [[ "$(id -u)" != 0 ]]; then
+if [[ "$(id -u)" != 0 ]]; then
 	sudo "$0" "$@"
 	exit
 fi

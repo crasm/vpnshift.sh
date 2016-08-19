@@ -68,6 +68,7 @@ Dependencies
   - bash
   - sudo
   - openvpn
+  - iptables
 
 Acknowledgements
 ----------------

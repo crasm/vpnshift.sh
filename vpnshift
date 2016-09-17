@@ -80,6 +80,8 @@ clean_exit() {
 			>&2 echo "forced to kill openvpn"
 			sig_kill "${openvpn_pid}"
 		fi
+	else
+		>&2 echo "openvpn exited"
 	fi
 
 	# Sometimes there's a lag for the veths to be deleted by linux, so we
@@ -197,7 +199,7 @@ if [[ $# == 0 ]]; then
 	die "${usage}"
 elif [[ "$(id -u)" != 0 ]]; then
 	sudo "$0" "$@"
-	exit
+	exit "$?"
 fi
 
 # Stuff needed by clean_exit() to restore previous state.
@@ -211,6 +213,6 @@ openvpn_pid= # This is set later.
 
 # Enable cleanup routine.
 trap 'clean_exit 1' INT TERM
-trap 'clean_exit 0' EXIT
+trap 'clean_exit $?' EXIT
 
 main "$@"

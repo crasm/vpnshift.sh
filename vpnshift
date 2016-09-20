@@ -170,8 +170,7 @@ main() {
 	must sysctl --quiet net.ipv4.ip_forward=1
 
 	# check if we need to enable masquerading via firewalld for veth_default
-	if [ `pgrep firewalld` ]
-	then
+	if hush ps -C 'firewalld'; then
 		echo "[firewalld] enabling firewalld based masquerading for ${veth_default}"
 
 		if [[ $(firewall-cmd --get-zones | grep "${namespace}") != *"${namespace}"* ]]
@@ -218,9 +217,8 @@ main() {
 		"104.238.194.235"
 
 	# drop in a shell to debug namespace connectivity ... the exit trap will catch exit from this and clean up
-	if [ "$_debug" -eq 1 ]
-	then
-		ip netns exec "${namespace}" bash
+	if [[ "$_debug" == 1 ]]; then
+		ip netns exec "${namespace}" "${SHELL}"
 	fi
 
 	# Launch openvpn

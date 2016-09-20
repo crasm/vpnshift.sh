@@ -14,16 +14,24 @@
 # ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 # OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+
 usage="usage: vpnshift -c <config> [<command> [<arg>...]]
 optional:
 	-u <user>      Execute <command> as <user>
 	-l <logfile>   Log openvpn output to <logfile>
+	-d             Toggle namespace debug shell
 
 if not otherwise specified:
 	- The command defaults to the user's shell (${SHELL}).
 	- The user must be inferred from sudo.
 	- Logs are placed in /var/log/vpnshift/.
 "
+
+quick_die() {
+    format="$1"; shift
+    >&2 printf "${format}\n" "$@"
+    exit 1
+}
 
 die() {
 	format="$1"; shift
@@ -57,11 +65,6 @@ sig_term() {
 clean_exit() {
 	local exit_code="$1"
 
-	hush ip netns delete "${namespace}"
-	hush rm --recursive --force "${namespace_dir}"
-	hush sysctl --quiet net.ipv4.ip_forward="${forward}"
-	echo "${rules}" | hush iptables-restore
-
 	if is_running "${openvpn_pid}"; then
 		# Kill openvpn.
 		sig_term "${openvpn_pid}"
@@ -84,6 +87,18 @@ clean_exit() {
 		>&2 echo "openvpn exited"
 	fi
 
+    # don't start cleaning up until openvpn is gone
+    hush ip netns delete "${namespace}"
+    hush rm --recursive --force "${namespace_dir}"
+    hush sysctl --quiet net.ipv4.ip_forward="${forward}"
+    if [ ! `pgrep firewalld` ]
+    then
+        echo "${rules}" | hush iptables-restore
+    else
+        echo "[firewalld] clearing firewalld state"
+        hush systemctl restart firewalld
+    fi  
+
 	# Sometimes there's a lag for the veths to be deleted by linux, so we
 	# delete it manually.
 	hush ip link delete "${veth_default}"
@@ -92,6 +107,8 @@ clean_exit() {
 	exit "${exit_code}"
 }
 
+_debug=0
+
 main() {
 	local logdir="/var/log/vpnshift"
 	mkdir --parents "${logdir}"
@@ -99,23 +116,24 @@ main() {
 	local config=
 	local user="${SUDO_USER}"
 	local log="${logdir}/openvpn.log"
-	while getopts "hc:u:l:" opt; do
+	while getopts "hdc:u:l:" opt; do
 		case "${opt}" in
-			h) die "${usage}" ;;
+			h) quick_die "${usage}" ;;
+            d) _debug=1 ;;
 			c) config="$(realpath "${OPTARG}")" ;;
 			u) user="${OPTARG}" ;;
 			l) log="$(realpath "${OPTARG}")" ;;
-			*) die "unknown option: %s" "${opt}" ;;
+			*) quick_die "unknown option: %s" "${opt}" ;;
 		esac
 	done
 	shift $(( OPTIND - 1 ))
 
 	if [[ -z "${config}" ]]; then
-		die "openvpn config is required"
+		quick_die "openvpn config is required"
 	fi
 
 	if [[ -z "${user}" ]]; then
-		die "user must be provided explicitly via '-u' or implicitly via SUDO_USER"
+		quick_die "user must be provided explicitly via '-u' or implicitly via SUDO_USER"
 	fi
 
 	local cmd="$1"; shift
@@ -149,18 +167,61 @@ main() {
 		route add default via "10.10.10.10" dev "${veth_vpn}"
 
 	# Set up NAT and IP forwarding
-
 	must sysctl --quiet net.ipv4.ip_forward=1
-	must iptables --table "nat" \
-		--append "POSTROUTING" \
-		--jump "MASQUERADE" \
-		--source "10.10.10.10/31"
 
-	# Set up DNS inside the new namespace
+    # check if we need to enable masquerading via firewalld for veth_default
+    if [ `pgrep firewalld` ]
+    then
+        echo "[firewalld] enabling firewalld based masquerading for ${veth_default}"
+
+        if [[ $(firewall-cmd --get-zones | grep "${namespace}") != *"${namespace}"* ]]
+        then
+            echo "[firewalld] creating permanent new zone ${namespace} with target default"
+            must firewall-cmd -q --permanent --new-zone="${namespace}"
+            must firewall-cmd -q --permanent --zone="${namespace}" --set-target="default"
+            must firewall-cmd -q --reload
+        fi
+
+        # add interface to our zone
+        echo "[firewalld] adding ${veth_default} and ${veth_vpn} to zone ${namespace}"
+        must firewall-cmd -q --zone="${namespace}" --change-interface="${veth_default}"
+
+        # apply our source range to our zone
+        echo "[firewalld] adding 10.10.10.10/31 as source for ${namespace}"
+        must firewall-cmd -q --zone="${namespace}" --add-source=10.10.10.10/31
+
+        # enable masquerading from our new source range on the default zone
+        default_zone=$(firewall-cmd --get-default-zone)
+        echo "[firewalld] enabling masquerading on default zone: ${default_zone}"
+        must firewall-cmd -q --zone="${default_zone}" --add-masquerade
+        must firewall-cmd -q --zone="${default_zone}"  --add-rich-rule=\'rule family="ipv4" source address="10.10.10.10/31" masquerade\'
+
+        # optionally allow ports, services, etc. on our zone
+
+        # enabling desired ports
+        #echo "enabling all port traffic on zone ${namespace}"
+        #must firewall-cmd -q --zone="${namespace}" --add-port=1025-65535/udp
+        #must firewall-cmd -q --zone="${namespace}" --add-port=1025-65535/tcp
+
+        # enable services
+        #echo "enabling dns on zone ${namespace}"
+        #must firewall-cmd -q --zone="${namespace}" --add-service=dns
+
+    else
+        must iptables --table "nat" --append "POSTROUTING" --jump "MASQUERADE" --source "10.10.10.10/31"
+    fi
+
+    # Set up DNS inside the new namespace
 	printf > "${namespace_dir}/resolv.conf" \
 		"nameserver %s\nnameserver %s\n" \
 		"108.62.19.131" \
 		"104.238.194.235"
+
+    # drop in a shell to debug namespace connectivity ... the exit trap will catch exit from this and clean up
+    if [ "$_debug" -eq 1 ]
+    then
+        ip netns exec "${namespace}" bash
+    fi
 
 	# Launch openvpn
 
@@ -196,7 +257,7 @@ main() {
 }
 
 if [[ $# == 0 ]]; then
-	die "${usage}"
+	quick_die "${usage}"
 elif [[ "$(id -u)" != 0 ]]; then
 	sudo "$0" "$@"
 	exit "$?"

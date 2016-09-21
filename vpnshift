@@ -91,12 +91,11 @@ clean_exit() {
 	hush ip netns delete "${namespace}"
 	hush rm --recursive --force "${namespace_dir}"
 	hush sysctl --quiet net.ipv4.ip_forward="${forward}"
-	if [ ! `pgrep firewalld` ]
-	then
-		echo "${rules}" | hush iptables-restore
-	else
+	if hush ps -C 'firewalld'; then
 		echo "[firewalld] clearing firewalld state"
 		hush systemctl restart firewalld
+	else
+		echo "${rules}" | hush iptables-restore
 	fi
 
 	# Sometimes there's a lag for the veths to be deleted by linux, so we

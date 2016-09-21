@@ -147,9 +147,9 @@ main() {
 
 	# Set up loopback interface
 
-	must ip -netns "${namespace}" address add '127.0.0.1/8' dev lo
-	must ip -netns "${namespace}" address add '::1/128' dev lo
-	must ip -netns "${namespace}" link set lo up
+	must ip netns exec "${namespace}" ip address add '127.0.0.1/8' dev lo
+	must ip netns exec "${namespace}" ip address add '::1/128' dev lo
+	must ip netns exec "${namespace}" ip link set lo up
 
 	# Set up veth tunnel
 
@@ -157,13 +157,13 @@ main() {
 	must ip link set "${veth_vpn}" netns "${namespace}"
 
 	must ip link set "${veth_default}" up
-	must ip -netns "${namespace}" link set "${veth_vpn}" up
+	must ip netns exec "${namespace}" ip link set "${veth_vpn}" up
 
 	must ip address add "10.10.10.10/31" dev "${veth_default}"
-	must ip -netns "${namespace}" \
+	must ip netns exec "${namespace}" ip \
 		address add "10.10.10.11/31" dev "${veth_vpn}"
 
-	must ip -netns "${namespace}" \
+	must ip netns exec "${namespace}" ip \
 		route add default via "10.10.10.10" dev "${veth_vpn}"
 
 	# Set up NAT and IP forwarding
@@ -237,7 +237,7 @@ main() {
 
 	>&2 printf "waiting for openvpn (pid = %d)." "${openvpn_pid}"
 
-	while ! hush ip -netns "${namespace}" link show "${tun}"; do
+	while ! hush ip netns exec "${namespace}" ip link show "${tun}"; do
 		if ! is_running "${openvpn_pid}"; then
 			clean_exit 1
 		fi
@@ -248,7 +248,7 @@ main() {
 
 	# Removing the default route protects from exposure if openvpn exits
 	# prematurely.
-	must ip -netns "${namespace}" \
+	must ip netns exec "${namespace}" ip \
 		route delete default via "10.10.10.10" dev "${veth_vpn}"
 
 	ip netns exec "${namespace}" sudo -u "${user}" "${cmd}" "$@"

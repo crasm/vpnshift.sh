@@ -118,7 +118,7 @@ main() {
 
 	local config=
 	local user="${SUDO_USER}"
-	local log="${logdir}/openvpn.log"
+	local log="${logdir}/$(date +%y%m%d@%H%M%S)+$(uuidgen -r)_openvpn.log"
 	while getopts "hdc:u:l:" opt; do
 		case "${opt}" in
 			h) quick_die "${usage}" ;;

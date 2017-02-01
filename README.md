@@ -79,3 +79,8 @@ modified version of that script while I was still trying to get vpnshift
 to work.
 
 [vpnns.sh]: https://gist.github.com/Schnouki/fd171bcb2d8c556e8fdf
+
+Similar Projects
+----------------
+
+[ocproxy/vpnns](https://github.com/cernekee/ocproxy#vpnns-experimental)

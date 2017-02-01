@@ -18,13 +18,11 @@
 usage="usage: vpnshift -c <config> [<command> [<arg>...]]
 optional:
 	-u <user>      Execute <command> as <user>
-	-l <logfile>   Log openvpn output to <logfile>
 	-d             Toggle namespace debug shell
 
 if not otherwise specified:
 	- The command defaults to the user's shell (${SHELL}).
 	- The user must be inferred from sudo.
-	- Logs are placed in /var/log/vpnshift/.
 "
 
 quick_die() {
@@ -113,19 +111,14 @@ nsdo() {
 _debug=0
 
 main() {
-	local logdir="/var/log/vpnshift"
-	mkdir --parents "${logdir}"
-
 	local config=
 	local user="${SUDO_USER}"
-	local log="${logdir}/$(date +%y%m%d@%H%M%S)+$(uuidgen -r)_openvpn.log"
-	while getopts "hdc:u:l:" opt; do
+	while getopts "hdc:u:" opt; do
 		case "${opt}" in
 			h) quick_die "${usage}" ;;
 			d) _debug=1 ;;
 			c) config="$(realpath "${OPTARG}")" ;;
 			u) user="${OPTARG}" ;;
-			l) log="$(realpath "${OPTARG}")" ;;
 			*) quick_die "unknown option: %s" "${opt}" ;;
 		esac
 	done
@@ -225,29 +218,26 @@ main() {
 	fi
 
 	# Launch openvpn
-
 	local tun="tunvpn"
-	hush nsdo openvpn \
+	nsdo openvpn \
 		--cd "$(dirname "${config}")" \
 		--config "${config}" \
 		--dev "${tun}" \
-		--log "${log}" &
+		--errors-to-stderr &
 
 	openvpn_pid=$(ps --ppid "$!" \
 		--format "pid" \
 		--no-headers
 	)
 
-	>&2 printf "waiting for openvpn (pid = %d)." "${openvpn_pid}"
+	>&2 printf "waiting for openvpn (pid = %d)\n" "${openvpn_pid}"
 
 	while ! hush nsdo ip link show "${tun}"; do
 		if ! is_running "${openvpn_pid}"; then
 			clean_exit 1
 		fi
-		sleep 0.1
-		printf "."
+		sleep 0.2
 	done
-	printf "\n"
 
 	# Removing the default route protects from exposure if openvpn exits
 	# prematurely.
@@ -271,6 +261,7 @@ forward="$(sysctl --values "net.ipv4.ip_forward")"
 rules="$(iptables-save -t nat)"
 veth_default="veth_default"
 veth_vpn="veth_vpn"
+
 openvpn_pid= # This is set later.
 
 # Enable cleanup routine.
